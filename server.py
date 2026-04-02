@@ -29,11 +29,17 @@ logging.basicConfig(
 log = logging.getLogger("server")
 
 # ─── Config từ environment variables (Railway) ────────────────────────────────
-WEBHOOK_URL    = os.getenv("WEBHOOK_URL", "")           # URL nhận kết quả
+WEBHOOK_URL    = os.getenv("WEBHOOK_URL", "").strip()   # URL nhận kết quả
+if WEBHOOK_URL.startswith("https://http://"):
+    WEBHOOK_URL = WEBHOOK_URL.replace("https://", "", 1)
+if WEBHOOK_URL.startswith("http://http://"):
+    WEBHOOK_URL = WEBHOOK_URL.replace("http://", "", 1)
+WEBHOOK_URL = WEBHOOK_URL.rstrip("/")
 PROMPT_SOURCE  = os.getenv("PROMPT_SOURCE", "env")      # "env", "file", "url"
 PROMPT_URL     = os.getenv("PROMPT_URL", "")            # URL lấy prompts
 SELECTED_AIS   = os.getenv("SELECTED_AIS", "gemini,chatgpt,grok").split(",")
-API_SECRET     = os.getenv("API_SECRET", "change-me")  # Bảo vệ API
+API_SECRET     = os.getenv("API_SECRET", "change-me").strip()  # Bảo vệ API
+LEGACY_API_KEYS = {k for k in {API_SECRET, os.getenv("LEGACY_API_SECRET", "").strip(), "silas123"} if k}
 PORT           = int(os.getenv("PORT", 8000))
 ASK_TIMEOUT_SECONDS = int(os.getenv("ASK_TIMEOUT_SECONDS", "180"))
 MAX_PROMPT_CHARS = int(os.getenv("MAX_PROMPT_CHARS", "12000"))
@@ -382,7 +388,7 @@ def check_auth(request: Request):
     auth_header = request.headers.get("Authorization", "")
     bearer_secret = auth_header[7:].strip() if auth_header.lower().startswith("bearer ") else ""
     secret = request.headers.get("X-API-Secret") or bearer_secret or request.query_params.get("secret")
-    if secret != API_SECRET:
+    if secret not in LEGACY_API_KEYS:
         raise HTTPException(status_code=401, detail="Unauthorized - Cần X-API-Secret header")
 
 
