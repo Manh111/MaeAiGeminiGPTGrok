@@ -37,6 +37,7 @@ API_SECRET     = os.getenv("API_SECRET", "change-me")  # Bảo vệ API
 PORT           = int(os.getenv("PORT", 8000))
 ASK_TIMEOUT_SECONDS = int(os.getenv("ASK_TIMEOUT_SECONDS", "180"))
 MAX_PROMPT_CHARS = int(os.getenv("MAX_PROMPT_CHARS", "12000"))
+NO_LOGIN_MODE = os.getenv("NO_LOGIN_MODE", "1").strip().lower() not in {"0", "false", "no"}
 
 # Cookies lưu dưới dạng JSON string trong env vars
 GEMINI_COOKIES  = os.getenv("GEMINI_COOKIES", "")
@@ -109,7 +110,7 @@ async def scrape_ai(ai_name: str, prompt: str, cookies_json: str) -> str | None:
         return None
 
     cookies = []
-    if cookies_json:
+    if not NO_LOGIN_MODE and cookies_json:
         try:
             cookies = json.loads(cookies_json)
         except Exception:
@@ -144,6 +145,9 @@ async def scrape_ai(ai_name: str, prompt: str, cookies_json: str) -> str | None:
         if cookies:
             await ctx.add_cookies(cookies)
 
+        if NO_LOGIN_MODE:
+            log.info(f"🔓 {ai_name}: chạy chế độ guest/no-login, mở tab mới không dùng cookie")
+
         page = await ctx.new_page()
 
         # Chặn media để load nhanh
@@ -165,6 +169,9 @@ async def scrape_ai(ai_name: str, prompt: str, cookies_json: str) -> str | None:
                 result = await _scrape_chatgpt(page, prompt)
             elif ai_name == "grok":
                 result = await _scrape_grok(page, prompt)
+
+            if not result and NO_LOGIN_MODE:
+                log.warning(f"{ai_name}: không lấy được nội dung ở chế độ no-login; provider có thể đang yêu cầu đăng nhập")
 
             return result
 
@@ -407,6 +414,17 @@ def openai_like_response(model: str, content: str) -> dict:
     }
 
 
+def build_runtime_message(ai_name: str, result: str | None) -> str:
+    if result:
+        return result
+    if NO_LOGIN_MODE:
+        return (
+            f"{ai_name} hiện đang yêu cầu đăng nhập khi chạy ở chế độ guest/no-login. "
+            f"Hãy bật cookies hoặc đổi sang API chính thức nếu muốn dùng ổn định."
+        )
+    return f"{ai_name} không trả về nội dung"
+
+
 @app.post("/ask")
 async def ask_single(payload: AskRequest, request: Request):
     """Chạy đồng bộ 1 prompt cho 1 AI cụ thể (gemini/chatgpt/grok)."""
@@ -598,6 +616,7 @@ async def status():
         "selected_ais": SELECTED_AIS,
         "prompt_url": PROMPT_URL,
         "webhook_url": WEBHOOK_URL,
+        "no_login_mode": NO_LOGIN_MODE,
     }
 
 
@@ -635,9 +654,14 @@ async def chat_completions(request: Request, body: ChatCompletionRequest):
         raise HTTPException(status_code=504, detail=f"{ai_name} timed out")
 
     if not result:
+        if NO_LOGIN_MODE:
+            return openai_like_response(
+                f"{ai_name}:{resolved_model}",
+                build_runtime_message(ai_name, None),
+            )
         raise HTTPException(status_code=502, detail=f"{ai_name} returned empty response")
 
-    return openai_like_response(f"{ai_name}:{resolved_model}", result)
+    return openai_like_response(f"{ai_name}:{resolved_model}", build_runtime_message(ai_name, result))
 
 
 # ─── Entry point ───────────────────────────────────────────────────────────────
