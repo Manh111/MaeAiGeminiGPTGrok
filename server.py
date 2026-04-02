@@ -61,6 +61,18 @@ class AskRequest(BaseModel):
     prompt: str
 
 
+class ChatMessage(BaseModel):
+    role: str
+    content: str
+
+
+class ChatCompletionRequest(BaseModel):
+    model: str = "gemini:default"
+    messages: list[ChatMessage]
+    stream: bool = False
+    max_tokens: int | None = None
+
+
 # ─── Helpers ───────────────────────────────────────────────────────────────────
 
 async def get_prompts_from_url() -> list[str]:
@@ -360,9 +372,39 @@ app.add_middleware(
 
 
 def check_auth(request: Request):
-    secret = request.headers.get("X-API-Secret") or request.query_params.get("secret")
+    auth_header = request.headers.get("Authorization", "")
+    bearer_secret = auth_header[7:].strip() if auth_header.lower().startswith("bearer ") else ""
+    secret = request.headers.get("X-API-Secret") or bearer_secret or request.query_params.get("secret")
     if secret != API_SECRET:
         raise HTTPException(status_code=401, detail="Unauthorized - Cần X-API-Secret header")
+
+
+def parse_model(model: str) -> tuple[str, str]:
+    raw = (model or "").strip()
+    lower = raw.lower()
+    if lower.startswith("gemini:"):
+        return "gemini", raw.split(":", 1)[1].strip() or "default"
+    if lower.startswith("chatgpt:"):
+        return "chatgpt", raw.split(":", 1)[1].strip() or "default"
+    if lower.startswith("grok:"):
+        return "grok", raw.split(":", 1)[1].strip() or "default"
+    if lower in SUPPORTED_AIS:
+        return lower, "default"
+    return "gemini", raw or "default"
+
+
+def openai_like_response(model: str, content: str) -> dict:
+    return {
+        "id": f"chatcmpl-{int(time.time())}",
+        "object": "chat.completion",
+        "created": int(time.time()),
+        "model": model,
+        "choices": [{
+            "index": 0,
+            "message": {"role": "assistant", "content": content},
+            "finish_reason": "stop",
+        }],
+    }
 
 
 @app.post("/ask")
@@ -562,6 +604,40 @@ async def status():
 @app.get("/health")
 async def health():
     return {"ok": True, "time": datetime.now().isoformat()}
+
+
+@app.post("/v1/chat/completions")
+async def chat_completions(request: Request, body: ChatCompletionRequest):
+    check_auth(request)
+
+    if body.stream:
+        raise HTTPException(status_code=400, detail="Streaming not supported on this endpoint")
+    if not body.messages:
+        raise HTTPException(status_code=400, detail="messages must not be empty")
+
+    ai_name, resolved_model = parse_model(body.model)
+    if ai_name not in SUPPORTED_AIS:
+        raise HTTPException(status_code=400, detail=f"Unsupported model provider: {ai_name}")
+
+    prompt = str(body.messages[-1].content or "").strip()
+    if not prompt:
+        raise HTTPException(status_code=400, detail="prompt must not be empty")
+    if len(prompt) > MAX_PROMPT_CHARS:
+        raise HTTPException(status_code=400, detail=f"prompt too long (max {MAX_PROMPT_CHARS} chars)")
+
+    cookies_json = COOKIE_MAP.get(ai_name, "")
+    try:
+        result = await asyncio.wait_for(
+            scrape_ai(ai_name, prompt, cookies_json),
+            timeout=ASK_TIMEOUT_SECONDS,
+        )
+    except asyncio.TimeoutError:
+        raise HTTPException(status_code=504, detail=f"{ai_name} timed out")
+
+    if not result:
+        raise HTTPException(status_code=502, detail=f"{ai_name} returned empty response")
+
+    return openai_like_response(f"{ai_name}:{resolved_model}", result)
 
 
 # ─── Entry point ───────────────────────────────────────────────────────────────
