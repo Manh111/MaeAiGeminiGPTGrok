@@ -40,6 +40,7 @@ PROMPT_URL     = os.getenv("PROMPT_URL", "")            # URL lấy prompts
 SELECTED_AIS   = os.getenv("SELECTED_AIS", "gemini,chatgpt,grok").split(",")
 API_SECRET     = os.getenv("API_SECRET", "change-me").strip()  # Bảo vệ API
 LEGACY_API_KEYS = {k for k in {API_SECRET, os.getenv("LEGACY_API_SECRET", "").strip(), "silas123"} if k}
+ALLOW_PUBLIC_COMPLETIONS = os.getenv("ALLOW_PUBLIC_COMPLETIONS", "1").strip().lower() not in {"0", "false", "no"}
 PORT           = int(os.getenv("PORT", 8000))
 ASK_TIMEOUT_SECONDS = int(os.getenv("ASK_TIMEOUT_SECONDS", "180"))
 MAX_PROMPT_CHARS = int(os.getenv("MAX_PROMPT_CHARS", "12000"))
@@ -233,6 +234,13 @@ async def _scrape_gemini(page, prompt: str) -> str | None:
             texts = [await e.inner_text() for e in els]
             result = "\n".join(t for t in texts if t.strip())
             if result:
+                if "You stopped this response" in result:
+                    await page.wait_for_timeout(2500)
+                    retry_texts = [await e.inner_text() for e in els]
+                    retried = "\n".join(t for t in retry_texts if t.strip())
+                    if retried and "You stopped this response" not in retried:
+                        return retried
+                    return None
                 return result
     return None
 
@@ -384,7 +392,10 @@ app.add_middleware(
 )
 
 
-def check_auth(request: Request):
+def check_auth(request: Request, allow_public: bool = False):
+    if allow_public and ALLOW_PUBLIC_COMPLETIONS:
+        return
+
     auth_header = request.headers.get("Authorization", "")
     bearer_secret = auth_header[7:].strip() if auth_header.lower().startswith("bearer ") else ""
     secret = request.headers.get("X-API-Secret") or bearer_secret or request.query_params.get("secret")
@@ -623,6 +634,7 @@ async def status():
         "prompt_url": PROMPT_URL,
         "webhook_url": WEBHOOK_URL,
         "no_login_mode": NO_LOGIN_MODE,
+        "allow_public_completions": ALLOW_PUBLIC_COMPLETIONS,
     }
 
 
@@ -633,7 +645,7 @@ async def health():
 
 @app.post("/v1/chat/completions")
 async def chat_completions(request: Request, body: ChatCompletionRequest):
-    check_auth(request)
+    check_auth(request, allow_public=True)
 
     if body.stream:
         raise HTTPException(status_code=400, detail="Streaming not supported on this endpoint")
