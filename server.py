@@ -117,7 +117,7 @@ async def scrape_ai(ai_name: str, prompt: str, cookies_json: str) -> str | None:
         return None
 
     cookies = []
-    if not NO_LOGIN_MODE and cookies_json:
+    if cookies_json:
         try:
             cookies = json.loads(cookies_json)
         except Exception:
@@ -151,8 +151,8 @@ async def scrape_ai(ai_name: str, prompt: str, cookies_json: str) -> str | None:
 
         if cookies:
             await ctx.add_cookies(cookies)
-
-        if NO_LOGIN_MODE:
+            log.info(f"🔐 {ai_name}: đã nạp cookies đăng nhập ({len(cookies)} cookies)")
+        elif NO_LOGIN_MODE:
             log.info(f"🔓 {ai_name}: chạy chế độ guest/no-login, mở tab mới không dùng cookie")
 
         page = await ctx.new_page()
@@ -177,7 +177,7 @@ async def scrape_ai(ai_name: str, prompt: str, cookies_json: str) -> str | None:
             elif ai_name == "grok":
                 result = await _scrape_grok(page, prompt)
 
-            if not result and NO_LOGIN_MODE:
+            if not result and NO_LOGIN_MODE and not cookies:
                 log.warning(f"{ai_name}: không lấy được nội dung ở chế độ no-login; provider có thể đang yêu cầu đăng nhập")
 
             return result
