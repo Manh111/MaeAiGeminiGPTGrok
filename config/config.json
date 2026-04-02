@@ -1,0 +1,9 @@
+{
+  "webhook_url": "https://your-website.com/api/ai-results",
+  "prompt_source": "file",
+  "prompt_file": "data/prompts.txt",
+  "prompt_url": "https://your-website.com/api/get-prompts",
+  "selected_ais": ["gemini", "chatgpt", "grok"],
+  "delay_between_prompts": [5, 10],
+  "delay_between_ais": [2, 4]
+}
